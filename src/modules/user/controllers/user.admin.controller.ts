@@ -1,5 +1,4 @@
 import {
-    BadRequestException,
     Body,
     ConflictException,
     Controller,
@@ -32,7 +31,6 @@ import {
 import { PaginationListDto } from 'src/common/pagination/dtos/pagination.list.dto';
 import {
     PaginationQuery,
-    PaginationQueryFilterDate,
     PaginationQueryFilterEqual,
     PaginationQueryFilterInBoolean,
     PaginationQueryFilterInEnum,
@@ -52,8 +50,9 @@ import {
     UserAdminBlockedDoc,
     UserAdminCreateDoc,
     UserAdminGetDoc,
-    UserAdminGetHistoryListDoc,
-    UserAdminGetPasswordListDoc,
+    UserAdminGetLoginHistoryListDoc,
+    UserAdminGetPasswordHistoryListDoc,
+    UserAdminGetStateHistoryListDoc,
     UserAdminInactiveDoc,
     UserAdminListDoc,
     UserAdminUpdatePasswordDoc,
@@ -88,14 +87,17 @@ import { AuthService } from 'src/common/auth/services/auth.service';
 import { ClientSession, Connection } from 'mongoose';
 import { ENUM_APP_STATUS_CODE_ERROR } from 'src/app/constants/app.status-code.constant';
 import { DatabaseConnection } from 'src/common/database/decorators/database.decorator';
-import { UserHistoryService } from 'src/modules/user/services/user-history.service';
-import { UserPasswordService } from 'src/modules/user/services/user-password.service';
-import { UserUpdatePasswordRequestDto } from 'src/modules/user/dtos/request/user.update-password.request.dto';
-import { SettingService } from 'src/modules/setting/services/setting.service';
-import { UserHistoryDoc } from 'src/modules/user/repository/entities/user-history.entity';
-import { UserPasswordDoc } from 'src/modules/user/repository/entities/user-password.entity';
-import { UserHistoryListResponseDto } from 'src/modules/user/dtos/response/user-history.list.response.dto';
-import { UserPasswordListResponseDto } from 'src/modules/user/dtos/response/user-password.list.response.dto';
+import { CountryService } from 'src/modules/country/services/country.service';
+import { ENUM_COUNTRY_STATUS_CODE_ERROR } from 'src/modules/country/constants/country.status-code.constant';
+import { UserStateHistoryService } from 'src/modules/user/services/user-state-history.service';
+import { UserPasswordHistoryService } from 'src/modules/user/services/user-password-history.service';
+import { UserStateHistoryDoc } from 'src/modules/user/repository/entities/user-state-history.entity';
+import { UserPasswordHistoryDoc } from 'src/modules/user/repository/entities/user-password-history.entity';
+import { UserStateHistoryListResponseDto } from 'src/modules/user/dtos/response/user-state-history.list.response.dto';
+import { UserPasswordHistoryListResponseDto } from 'src/modules/user/dtos/response/user-password-history.list.response.dto';
+import { UserLoginHistoryDoc } from 'src/modules/user/repository/entities/user-login-history.entity';
+import { UserLoginHistoryListResponseDto } from 'src/modules/user/dtos/response/user-login-history.list.response.dto';
+import { UserLoginHistoryService } from 'src/modules/user/services/user-login-history.service';
 
 @ApiTags('modules.admin.user')
 @Controller({
@@ -110,9 +112,10 @@ export class UserAdminController {
         private readonly emailService: EmailService,
         private readonly authService: AuthService,
         private readonly userService: UserService,
-        private readonly userHistoryService: UserHistoryService,
-        private readonly userPasswordService: UserPasswordService,
-        private readonly settingService: SettingService
+        private readonly userStateHistoryService: UserStateHistoryService,
+        private readonly userPasswordHistoryService: UserPasswordHistoryService,
+        private readonly userLoginHistoryService: UserLoginHistoryService,
+        private readonly countryService: CountryService
     ) {}
 
     @UserAdminListDoc()
@@ -139,14 +142,6 @@ export class UserAdminController {
         status: Record<string, any>,
         @PaginationQueryFilterInBoolean('blocked', USER_DEFAULT_BLOCKED)
         blocked: Record<string, any>,
-        @PaginationQueryFilterDate('startDate', {
-            raw: true,
-        })
-        startDate: Record<string, any>,
-        @PaginationQueryFilterDate('endDate', {
-            raw: true,
-        })
-        endDate: Record<string, any>,
         @PaginationQueryFilterEqual('role')
         role: Record<string, any>
     ): Promise<IResponsePaging<UserListResponseDto>> {
@@ -157,23 +152,14 @@ export class UserAdminController {
             ...role,
         };
 
-        if (startDate && endDate) {
-            find.signUpDate = {
-                $gte: startDate.startDate,
-                $lte: endDate.endDate,
-            };
-        }
-
-        const users: IUserDoc[] = await this.userService.findAllWithRoles(
-            find,
-            {
+        const users: IUserDoc[] =
+            await this.userService.findAllWithRoleAndCountry(find, {
                 paging: {
                     limit: _limit,
                     offset: _offset,
                 },
                 order: _order,
-            }
-        );
+            });
         const total: number = await this.userService.getTotal(find);
         const totalPage: number = this.paginationService.totalPage(
             total,
@@ -201,16 +187,15 @@ export class UserAdminController {
     async get(
         @Param('user', RequestRequiredPipe, UserParsePipe) user: UserDoc
     ): Promise<IResponse<UserProfileResponseDto>> {
-        const userWithRole: IUserDoc =
-            await this.userService.joinWithRole(user);
+        const userWithRole: IUserDoc = await this.userService.join(user);
         const mapped: UserProfileResponseDto =
             await this.userService.mapProfile(userWithRole);
 
         return { data: mapped };
     }
 
-    @UserAdminGetHistoryListDoc()
-    @ResponsePaging('user.listHistory')
+    @UserAdminGetStateHistoryListDoc()
+    @ResponsePaging('user.stateHistoryList')
     @PolicyAbilityProtected({
         subject: ENUM_POLICY_SUBJECT.USER,
         action: [ENUM_POLICY_ACTION.READ],
@@ -218,25 +203,25 @@ export class UserAdminController {
     @PolicyRoleProtected(ENUM_POLICY_ROLE_TYPE.ADMIN)
     @AuthJwtAccessProtected()
     @ApiKeyPublicProtected()
-    @Get('/get/:user/history/list')
-    async listHistory(
+    @Get('/get/:user/state/history')
+    async stateHistoryList(
         @Param('user', RequestRequiredPipe, UserParsePipe) user: UserDoc,
         @PaginationQuery()
         { _search, _limit, _offset, _order }: PaginationListDto
-    ): Promise<IResponsePaging<UserHistoryListResponseDto>> {
+    ): Promise<IResponsePaging<UserStateHistoryListResponseDto>> {
         const find: Record<string, any> = {
             ..._search,
         };
 
-        const userHistories: UserHistoryDoc[] =
-            await this.userHistoryService.findAllByUser(user._id, find, {
+        const userHistories: UserStateHistoryDoc[] =
+            await this.userStateHistoryService.findAllByUser(user._id, find, {
                 paging: {
                     limit: _limit,
                     offset: _offset,
                 },
                 order: _order,
             });
-        const total: number = await this.userHistoryService.getTotalByUser(
+        const total: number = await this.userStateHistoryService.getTotalByUser(
             user._id,
             find
         );
@@ -245,7 +230,8 @@ export class UserAdminController {
             _limit
         );
 
-        const mapped = await this.userHistoryService.mapList(userHistories);
+        const mapped =
+            await this.userStateHistoryService.mapList(userHistories);
 
         return {
             _pagination: { total, totalPage },
@@ -253,8 +239,8 @@ export class UserAdminController {
         };
     }
 
-    @UserAdminGetPasswordListDoc()
-    @ResponsePaging('user.listPassword')
+    @UserAdminGetPasswordHistoryListDoc()
+    @ResponsePaging('user.passwordHistoryList')
     @PolicyAbilityProtected({
         subject: ENUM_POLICY_SUBJECT.USER,
         action: [ENUM_POLICY_ACTION.READ],
@@ -262,25 +248,75 @@ export class UserAdminController {
     @PolicyRoleProtected(ENUM_POLICY_ROLE_TYPE.ADMIN)
     @AuthJwtAccessProtected()
     @ApiKeyPublicProtected()
-    @Get('/get/:user/password/list')
-    async listPassword(
+    @Get('/get/:user/password/history')
+    async passwordHistoryList(
         @Param('user', RequestRequiredPipe, UserParsePipe) user: UserDoc,
         @PaginationQuery()
         { _search, _limit, _offset, _order }: PaginationListDto
-    ): Promise<IResponsePaging<UserPasswordListResponseDto>> {
+    ): Promise<IResponsePaging<UserPasswordHistoryListResponseDto>> {
         const find: Record<string, any> = {
             ..._search,
         };
 
-        const userHistories: UserPasswordDoc[] =
-            await this.userPasswordService.findAllByUser(user._id, find, {
+        const userHistories: UserPasswordHistoryDoc[] =
+            await this.userPasswordHistoryService.findAllByUser(
+                user._id,
+                find,
+                {
+                    paging: {
+                        limit: _limit,
+                        offset: _offset,
+                    },
+                    order: _order,
+                }
+            );
+        const total: number =
+            await this.userPasswordHistoryService.getTotalByUser(
+                user._id,
+                find
+            );
+        const totalPage: number = this.paginationService.totalPage(
+            total,
+            _limit
+        );
+
+        const mapped =
+            await this.userPasswordHistoryService.mapList(userHistories);
+
+        return {
+            _pagination: { total, totalPage },
+            data: mapped,
+        };
+    }
+
+    @UserAdminGetLoginHistoryListDoc()
+    @ResponsePaging('user.loginHistoryList')
+    @PolicyAbilityProtected({
+        subject: ENUM_POLICY_SUBJECT.USER,
+        action: [ENUM_POLICY_ACTION.READ],
+    })
+    @PolicyRoleProtected(ENUM_POLICY_ROLE_TYPE.ADMIN)
+    @AuthJwtAccessProtected()
+    @ApiKeyPublicProtected()
+    @Get('/get/:user/login/history')
+    async loginHistoryList(
+        @Param('user', RequestRequiredPipe, UserParsePipe) user: UserDoc,
+        @PaginationQuery()
+        { _search, _limit, _offset, _order }: PaginationListDto
+    ): Promise<IResponsePaging<UserLoginHistoryListResponseDto>> {
+        const find: Record<string, any> = {
+            ..._search,
+        };
+
+        const userHistories: UserLoginHistoryDoc[] =
+            await this.userLoginHistoryService.findAllByUser(user._id, find, {
                 paging: {
                     limit: _limit,
                     offset: _offset,
                 },
                 order: _order,
             });
-        const total: number = await this.userPasswordService.getTotalByUser(
+        const total: number = await this.userLoginHistoryService.getTotalByUser(
             user._id,
             find
         );
@@ -289,7 +325,8 @@ export class UserAdminController {
             _limit
         );
 
-        const mapped = await this.userPasswordService.mapList(userHistories);
+        const mapped =
+            await this.userLoginHistoryService.mapList(userHistories);
 
         return {
             _pagination: { total, totalPage },
@@ -308,35 +345,16 @@ export class UserAdminController {
     @Post('/create')
     async create(
         @Body()
-        {
-            email,
-            mobileNumber,
-            role,
-            firstName,
-            lastName,
-            password: passwordString,
-        }: UserCreateRequestDto
+        { email, role, name, country }: UserCreateRequestDto,
+        @AuthJwtPayload('_id') _id: string
     ): Promise<IResponse<DatabaseIdResponseDto>> {
-        const checkMobileNumberAllowed =
-            await this.settingService.checkMobileNumberAllowed(mobileNumber);
-        if (!checkMobileNumberAllowed) {
-            throw new BadRequestException({
-                statusCode:
-                    ENUM_USER_STATUS_CODE_ERROR.MOBILE_NUMBER_NOT_ALLOWED_ERROR,
-                message: 'user.error.mobileNumberNotAllowed',
-            });
-        }
-
         const promises: Promise<any>[] = [
             this.roleService.findOneById(role),
             this.userService.existByEmail(email),
+            this.countryService.findOneActiveById(country),
         ];
 
-        if (mobileNumber) {
-            promises.push(this.userService.existByMobileNumber(mobileNumber));
-        }
-
-        const [checkRole, emailExist, mobileNumberExist] =
+        const [checkRole, emailExist, checkCountry] =
             await Promise.all(promises);
 
         if (!checkRole) {
@@ -344,19 +362,19 @@ export class UserAdminController {
                 statusCode: ENUM_ROLE_STATUS_CODE_ERROR.NOT_FOUND_ERROR,
                 message: 'role.error.notFound',
             });
+        } else if (!checkCountry) {
+            throw new NotFoundException({
+                statusCode: ENUM_COUNTRY_STATUS_CODE_ERROR.NOT_FOUND_ERROR,
+                message: 'country.error.notFound',
+            });
         } else if (emailExist) {
             throw new ConflictException({
                 statusCode: ENUM_USER_STATUS_CODE_ERROR.EMAIL_EXIST_ERROR,
                 message: 'user.error.emailExist',
             });
-        } else if (mobileNumberExist) {
-            throw new ConflictException({
-                statusCode:
-                    ENUM_USER_STATUS_CODE_ERROR.MOBILE_NUMBER_EXIST_ERROR,
-                message: 'user.error.mobileNumberExist',
-            });
         }
 
+        const passwordString = await this.authService.createPasswordRandom();
         const password: IAuthPassword =
             await this.authService.createPassword(passwordString);
 
@@ -368,29 +386,33 @@ export class UserAdminController {
             const created = await this.userService.create(
                 {
                     email,
-                    mobileNumber,
+                    country,
                     role,
-                    firstName,
-                    lastName,
-                    password: passwordString,
+                    name,
                 },
                 password,
                 ENUM_USER_SIGN_UP_FROM.ADMIN,
                 { session }
             );
-            await this.userHistoryService.createCreatedByUser(
+            await this.userStateHistoryService.createCreated(
                 created,
                 created._id,
                 {
                     session,
                 }
             );
-            await this.userPasswordService.createByUser(created, { session });
+            await this.userPasswordHistoryService.createByAdmin(created, _id, {
+                session,
+            });
 
-            await this.emailService.sendSignUp({
+            const emailSend = {
                 email,
-                name:
-                    firstName && lastName ? `${firstName} ${lastName}` : email,
+                name,
+            };
+            await this.emailService.sendWelcome(emailSend);
+            await this.emailService.sendTempPassword(emailSend, {
+                password: passwordString,
+                expiredAt: password.passwordExpired,
             });
 
             await session.commitTransaction();
@@ -438,7 +460,7 @@ export class UserAdminController {
 
         try {
             await this.userService.inactive(user, { session });
-            await this.userHistoryService.createInactiveByUser(user, _id, {
+            await this.userStateHistoryService.createInactive(user, _id, {
                 session,
             });
 
@@ -485,7 +507,7 @@ export class UserAdminController {
 
         try {
             await this.userService.active(user, { session });
-            await this.userHistoryService.createActiveByUser(user, _id, {
+            await this.userStateHistoryService.createActive(user, _id, {
                 session,
             });
 
@@ -532,7 +554,7 @@ export class UserAdminController {
 
         try {
             await this.userService.blocked(user, { session });
-            await this.userHistoryService.createBlockedByUser(user, _id, {
+            await this.userStateHistoryService.createBlocked(user, _id, {
                 session,
             });
 
@@ -563,22 +585,17 @@ export class UserAdminController {
     @ApiKeyPublicProtected()
     @Put('/update/:user/password')
     async updatePassword(
-        @Param(
-            'user',
-            RequestRequiredPipe,
-            UserParsePipe,
-            UserNotSelfPipe,
-            UserStatusInactivePipe
-        )
+        @Param('user', RequestRequiredPipe, UserParsePipe, UserNotSelfPipe)
         user: UserDoc,
-        @AuthJwtPayload('_id') _id: string,
-        @Body() { password: passwordString }: UserUpdatePasswordRequestDto
+        @AuthJwtPayload('_id') _id: string
     ): Promise<void> {
         const session: ClientSession =
             await this.databaseConnection.startSession();
         session.startTransaction();
 
         try {
+            const passwordString =
+                await this.authService.createPasswordRandom();
             const password =
                 await this.authService.createPassword(passwordString);
             user = await this.userService.updatePassword(user, password, {
@@ -587,8 +604,17 @@ export class UserAdminController {
             user = await this.userService.resetPasswordAttempt(user, {
                 session,
             });
-            await this.userPasswordService.createByUser(user, {
+            await this.userPasswordHistoryService.createByAdmin(user, _id, {
                 session,
+            });
+
+            const emailSend = {
+                email: user.email,
+                name: user.name,
+            };
+            await this.emailService.sendTempPassword(emailSend, {
+                password: passwordString,
+                expiredAt: password.passwordExpired,
             });
 
             await session.commitTransaction();

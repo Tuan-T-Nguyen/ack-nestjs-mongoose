@@ -1,15 +1,18 @@
-import { Prop, SchemaFactory } from '@nestjs/mongoose';
-import { Document } from 'mongoose';
 import { DatabaseMongoUUIDEntityAbstract } from 'src/common/database/abstracts/mongo/entities/database.mongo.uuid.entity.abstract';
-import { DatabaseEntity } from 'src/common/database/decorators/database.decorator';
+import {
+    DatabaseEntity,
+    DatabaseProp,
+    DatabaseSchema,
+} from 'src/common/database/decorators/database.decorator';
+import { IDatabaseDocument } from 'src/common/database/interfaces/database.interface';
 import { ENUM_USER_HISTORY_STATE } from 'src/modules/user/constants/user-history.enum.constant';
 import { UserEntity } from 'src/modules/user/repository/entities/user.entity';
 
-export const UserHistoryDatabaseName = 'userhistories';
+export const UserStateHistoryTableName = 'UserStateHistories';
 
-@DatabaseEntity({ collection: UserHistoryDatabaseName })
-export class UserHistoryEntity extends DatabaseMongoUUIDEntityAbstract {
-    @Prop({
+@DatabaseEntity({ collection: UserStateHistoryTableName })
+export class UserStateHistoryEntity extends DatabaseMongoUUIDEntityAbstract {
+    @DatabaseProp({
         required: true,
         index: true,
         trim: true,
@@ -18,21 +21,21 @@ export class UserHistoryEntity extends DatabaseMongoUUIDEntityAbstract {
     })
     user: string;
 
-    @Prop({
+    @DatabaseProp({
         required: true,
         type: String,
         enum: ENUM_USER_HISTORY_STATE,
     })
     beforeState: ENUM_USER_HISTORY_STATE;
 
-    @Prop({
+    @DatabaseProp({
         required: true,
         type: String,
         enum: ENUM_USER_HISTORY_STATE,
     })
     afterState: ENUM_USER_HISTORY_STATE;
 
-    @Prop({
+    @DatabaseProp({
         required: true,
         index: true,
         trim: true,
@@ -42,7 +45,5 @@ export class UserHistoryEntity extends DatabaseMongoUUIDEntityAbstract {
     by: string;
 }
 
-export const UserHistorySchema =
-    SchemaFactory.createForClass(UserHistoryEntity);
-
-export type UserHistoryDoc = UserHistoryEntity & Document;
+export const UserStateHistorySchema = DatabaseSchema(UserStateHistoryEntity);
+export type UserStateHistoryDoc = IDatabaseDocument<UserStateHistoryEntity>;
